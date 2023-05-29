@@ -314,8 +314,6 @@ class Command(BaseCommand):
                 return 'SHOW_MASTERS'
             return 'SELECT_TIME'
 
-
-
         def make_record(update, context):
             query = update.callback_query
             print('make_record')
@@ -323,14 +321,37 @@ class Command(BaseCommand):
             print(context.user_data)
             if 'master' in query.data:
                 master_id = query.data.split('_')[1]
-                context.user_data['masterschedule'] = context.user_data['master_schedules'].filter(master__id=master_id).first()
+                context.user_data['masterschedule'] = context.user_data['master_schedules'].filter(
+                    master__id=master_id).first()
             if 'shift' in query.data:
                 shift_id = query.data.split('_')[1]
-                context.user_data['shift'] =Shift.objects.get(pk=shift_id)
+                context.user_data['shift'] = Shift.objects.get(pk=shift_id)
+            if query.data == "consent_yes":
+                query.answer()
+                query.message.reply_text("Введите ваше имя:")
+                return 'GET_NAME'
+            if query.data == "consent_no":
+                query.answer()
+                query.message.reply_text("Вы отказались от обработки персональных данных.")
+                return 'GREA'
 
+
+            nickname = update.effective_user.username
+            client, created = Client.objects.get_or_create(nickname=nickname)
+            client.personal_data_consent = True
+            client.save()
             query.answer()
-            query.edit_message_text("Введите ваше имя:")
-            return 'GET_NAME'
+
+            keyboard = [
+                [InlineKeyboardButton("Согласен", callback_data="consent_yes")],
+                [InlineKeyboardButton("Не согласен", callback_data="consent_no")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            if query.message.reply_markup != reply_markup:
+                query.edit_message_text("Согласны ли вы на обработку ваших персональных данных?")
+                query.edit_message_reply_markup(reply_markup)
+            return 'MAKE_RECORD'
 
         def get_name(update, context):
             name = update.message.text.strip()
@@ -347,77 +368,38 @@ class Command(BaseCommand):
             parsed_number = parse(phone_number, 'RU')
 
             if is_valid_number(parsed_number):
+                # start_time = Shift.objects.get(pk=context.user_data['shift_id']).start_time
                 start_time = context.user_data['shift'].start_time
                 context.user_data['phone_number'] = phone_number
-
-                keyboard = [
-                    [InlineKeyboardButton("Согласен", callback_data="consent_yes")],
-                    [InlineKeyboardButton("Не согласен", callback_data="consent_no")],
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                update.message.reply_text("Согласны ли вы на обработку ваших персональных данных?",
-                                          reply_markup=reply_markup)
-
-                return 'GET_CONSENT'
-
-            else:
-                update.message.reply_text("Пожалуйста, введите корректный номер телефона.")
-                return 'GET_PHONE'
-
-        def handle_consent(update, context):
-            query = update.callback_query
-            consent = query.data
-
-            if consent == 'consent_yes':
-                start_time = context.user_data['shift'].start_time
-                nickname = update.effective_user.username  # Исправлено здесь
-                client, created = Client.objects.get_or_create(nickname=nickname,
-                                                               defaults={'name': context.user_data['name'],
-                                                                         'phone': context.user_data['phone_number']})
-
-                client.personal_data_consent = True
-                client.save()
-
-                context.user_data['client'] = client
-
                 keyboard = [
                     [InlineKeyboardButton("Оплатить услугу сразу", callback_data="to_pay_now")],
                     [InlineKeyboardButton("На главную", callback_data="to_start")],
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-
-                query.message.reply_text(
+                update.message.reply_text(
                     text=f"Спасибо за запись! До встречи ДД.ММ {str(start_time)} по адресу: ул. улица д. дом",
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.HTML
                 )
-
+                client, created = Client.objects.get_or_create(
+                    nickname=update.message.from_user.username,
+                )
+                client.name = context.user_data['name']
+                client.phone = phone_number
+                client.save()
+                print('\n Client: \n', client, f'\n{created}')
+                print(context.user_data)
                 client_offer = ClientOffer.objects.create(
-                    client=context.user_data['client'],
+                    client=client,
                     service=context.user_data['service'],
                     master_schedule=context.user_data['masterschedule'],
                     shift=context.user_data['shift']
                 )
                 print(client_offer)
                 return 'WAITING_FOR_CONFIRMATION'
-
-            elif consent == 'consent_no':
-                query.message.reply_text(
-                    "Извините, но мы не можем продолжить без вашего согласия на обработку персональных данных."
-                )
-
-                keyboard = [
-                    [InlineKeyboardButton("На главную", callback_data="to_start")],
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                query.message.reply_text(
-                    text="Вы отказались от обработки персональных данных.",
-                    reply_markup=reply_markup
-                )
-
-                return 'GREETINGS'
+            else:
+                update.message.reply_text("Пожалуйста, введите корректный номер телефона.")
+                return 'GET_PHONE'
 
         def send_invoice(update, context):
             query = update.callback_query
@@ -556,18 +538,16 @@ class Command(BaseCommand):
                     CallbackQueryHandler(call_salon, pattern='to_contacts'),
                     CallbackQueryHandler(show_masters, pattern='shift_*'),
                 ],
+                'MAKE_RECORD': [
+                    CallbackQueryHandler(make_record),
+                ],
+                'GET_NAME': [
+                    MessageHandler(Filters.text, get_name),
+                ],
+
                 'GET_PHONE': [
                     MessageHandler(Filters.text, get_phone),
                 ],
-                'GET_CONSENT': [
-                    CallbackQueryHandler(handle_consent, pattern='consent_yes'),
-                    CallbackQueryHandler(handle_consent, pattern='consent_no'),
-                ],
-                'HANDLE_CONSENT':[
-                    MessageHandler(Filters.text, handle_consent),
-                ],
-
-                'WAITING_FOR_CONFIRMATION': [CallbackQueryHandler(send_invoice, pattern='confirmation')],
                 'COMMON_INFO': [
                     CallbackQueryHandler(start_conversation, pattern='to_start'),
                     CallbackQueryHandler(call_salon, pattern='to_contacts'),
@@ -575,9 +555,7 @@ class Command(BaseCommand):
                 'SHOW_ANSWER': [
                     CallbackQueryHandler(start_conversation, pattern='to_start'),
                 ],
-                'GET_NAME': [
-                    MessageHandler(Filters.text, get_name),
-                ],
+
 
             },
             fallbacks=[CommandHandler('cancel', cancel)]
