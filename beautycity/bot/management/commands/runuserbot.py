@@ -350,36 +350,49 @@ class Command(BaseCommand):
                 start_time = context.user_data['shift'].start_time
                 context.user_data['phone_number'] = phone_number
 
-                update.message.reply_text("Согласны ли вы на обработку ваших персональных данных? (да/нет)")
+                keyboard = [
+                    [InlineKeyboardButton("Согласен", callback_data="consent_yes")],
+                    [InlineKeyboardButton("Не согласен", callback_data="consent_no")],
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                update.message.reply_text("Согласны ли вы на обработку ваших персональных данных?",
+                                          reply_markup=reply_markup)
+
                 return 'GET_CONSENT'
 
             else:
                 update.message.reply_text("Пожалуйста, введите корректный номер телефона.")
                 return 'GET_PHONE'
 
-        def get_consent(update, context):
-            consent = update.message.text.lower()
+        def handle_consent(update, context):
+            query = update.callback_query
+            consent = query.data
 
-            if consent == 'да':
+            if consent == 'consent_yes':
                 start_time = context.user_data['shift'].start_time
-                nickname = context.user_data['name']
+                nickname = update.effective_user.username  # Исправлено здесь
                 client, created = Client.objects.get_or_create(nickname=nickname,
                                                                defaults={'name': context.user_data['name'],
                                                                          'phone': context.user_data['phone_number']})
 
                 client.personal_data_consent = True
                 client.save()
+
                 context.user_data['client'] = client
+
                 keyboard = [
                     [InlineKeyboardButton("Оплатить услугу сразу", callback_data="to_pay_now")],
                     [InlineKeyboardButton("На главную", callback_data="to_start")],
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                update.message.reply_text(
+
+                query.message.reply_text(
                     text=f"Спасибо за запись! До встречи ДД.ММ {str(start_time)} по адресу: ул. улица д. дом",
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.HTML
                 )
+
                 client_offer = ClientOffer.objects.create(
                     client=context.user_data['client'],
                     service=context.user_data['service'],
@@ -389,18 +402,21 @@ class Command(BaseCommand):
                 print(client_offer)
                 return 'WAITING_FOR_CONFIRMATION'
 
-            else:
-                update.message.reply_text(
+            elif consent == 'consent_no':
+                query.message.reply_text(
                     "Извините, но мы не можем продолжить без вашего согласия на обработку персональных данных."
                 )
+
                 keyboard = [
                     [InlineKeyboardButton("На главную", callback_data="to_start")],
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                update.message.reply_text(
+
+                query.message.reply_text(
                     text="Вы отказались от обработки персональных данных.",
                     reply_markup=reply_markup
                 )
+
                 return 'GREETINGS'
 
         def send_invoice(update, context):
@@ -544,8 +560,13 @@ class Command(BaseCommand):
                     MessageHandler(Filters.text, get_phone),
                 ],
                 'GET_CONSENT': [
-                    MessageHandler(Filters.text, get_consent),
+                    CallbackQueryHandler(handle_consent, pattern='consent_yes'),
+                    CallbackQueryHandler(handle_consent, pattern='consent_no'),
                 ],
+                'HANDLE_CONSENT':[
+                    MessageHandler(Filters.text, handle_consent),
+                ],
+
                 'WAITING_FOR_CONFIRMATION': [CallbackQueryHandler(send_invoice, pattern='confirmation')],
                 'COMMON_INFO': [
                     CallbackQueryHandler(start_conversation, pattern='to_start'),
