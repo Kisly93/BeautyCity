@@ -347,9 +347,29 @@ class Command(BaseCommand):
             parsed_number = parse(phone_number, 'RU')
 
             if is_valid_number(parsed_number):
-                #start_time = Shift.objects.get(pk=context.user_data['shift_id']).start_time
                 start_time = context.user_data['shift'].start_time
                 context.user_data['phone_number'] = phone_number
+
+                update.message.reply_text("Согласны ли вы на обработку ваших персональных данных? (да/нет)")
+                return 'GET_CONSENT'
+
+            else:
+                update.message.reply_text("Пожалуйста, введите корректный номер телефона.")
+                return 'GET_PHONE'
+
+        def get_consent(update, context):
+            consent = update.message.text.lower()
+
+            if consent == 'да':
+                start_time = context.user_data['shift'].start_time
+                nickname = context.user_data['name']
+                client, created = Client.objects.get_or_create(nickname=nickname,
+                                                               defaults={'name': context.user_data['name'],
+                                                                         'phone': context.user_data['phone_number']})
+
+                client.personal_data_consent = True
+                client.save()
+                context.user_data['client'] = client
                 keyboard = [
                     [InlineKeyboardButton("Оплатить услугу сразу", callback_data="to_pay_now")],
                     [InlineKeyboardButton("На главную", callback_data="to_start")],
@@ -360,26 +380,28 @@ class Command(BaseCommand):
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.HTML
                 )
-                client, created = Client.objects.get_or_create(
-                    nickname=update.message.from_user.username,
-                )
-                client.name = context.user_data['name']
-                client.phone = phone_number
-                client.save()
-                print('\n Client: \n',client, f'\n{created }')
-                print(context.user_data)
                 client_offer = ClientOffer.objects.create(
-                    client=client,
+                    client=context.user_data['client'],
                     service=context.user_data['service'],
                     master_schedule=context.user_data['masterschedule'],
-                    shift = context.user_data['shift']
+                    shift=context.user_data['shift']
                 )
                 print(client_offer)
                 return 'WAITING_FOR_CONFIRMATION'
-            else:
-                update.message.reply_text("Пожалуйста, введите корректный номер телефона.")
-                return 'GET_PHONE'
 
+            else:
+                update.message.reply_text(
+                    "Извините, но мы не можем продолжить без вашего согласия на обработку персональных данных."
+                )
+                keyboard = [
+                    [InlineKeyboardButton("На главную", callback_data="to_start")],
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                update.message.reply_text(
+                    text="Вы отказались от обработки персональных данных.",
+                    reply_markup=reply_markup
+                )
+                return 'GREETINGS'
 
         def send_invoice(update, context):
             query = update.callback_query
@@ -519,9 +541,12 @@ class Command(BaseCommand):
                     CallbackQueryHandler(show_masters, pattern='shift_*'),
                 ],
                 'GET_PHONE': [
-                    CallbackQueryHandler(send_invoice, pattern='to_pay_now'),
-                    CallbackQueryHandler(start_conversation, pattern='to_start'),
+                    MessageHandler(Filters.text, get_phone),
                 ],
+                'GET_CONSENT': [
+                    MessageHandler(Filters.text, get_consent),
+                ],
+                'WAITING_FOR_CONFIRMATION': [CallbackQueryHandler(send_invoice, pattern='confirmation')],
                 'COMMON_INFO': [
                     CallbackQueryHandler(start_conversation, pattern='to_start'),
                     CallbackQueryHandler(call_salon, pattern='to_contacts'),
